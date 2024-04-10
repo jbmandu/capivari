@@ -1,0 +1,499 @@
+###############################################################################
+######                    MODELO: BASE 2011 A 2019                      #######
+###############################################################################
+pacotes <- c("dplyr","forecast","ggplot2","ggplotly","graphics","lubridate",
+             "plotly","readxl","scales","stats","tseries","urca","viridis",
+             "writexl", "zoo")
+
+if(sum(as.numeric(!pacotes %in% installed.packages())) != 0){
+  instalador <- pacotes[!pacotes %in% installed.packages()]
+  for(i in 1:length(instalador)) {
+                                  install.packages(instalador, dependencies = T)
+                                  break()
+                                  }
+  sapply(pacotes, require, character = T)
+} else {
+  sapply(pacotes, require, character = T)
+}
+###############################################################################
+#                                INICIO                                       #
+###############################################################################
+
+# Abrindo arquivo excel com os dados tratados
+
+df <- read_excel("bd_demanda_2011-2019.xlsx") 
+
+###############################################################################
+#                 INDICANDO OS PARÂMETROS PARA AS MODELAGENS
+###############################################################################
+
+# Transformando em série temporal somente [2] colunas de df: data e Teleférico
+
+ts_demanda <- ts(df[[2]], start = c(2011, 1), end = c(2019, 12), frequency = 12)
+
+plot(ts_demanda)
+
+# VARÁVEIS DE CROSS-VALIDATION
+
+# fazendo manualmente a atribuição da quantidade de anos para treino e para teste
+# sendo "i" treino e "j" teste podemos apenas alterar essas variáveis para o
+# Cross-Validation e rodar todo o script até a geração de tabelas
+
+i = 7
+j = 2
+
+#definindo janelas (intervalos para treino e teste)
+
+#janela de TREINO
+ini_treino = c(2011,1)
+fim_treino = c(2010 + i,12)
+
+#janela de TESTE
+ini_teste = c(2010 + i +1 ,1)
+fim_teste = c(2010 +i + j ,12)
+
+
+# ARMAZENANDO AS JANELAS DE TREINO E DE TESTE
+
+dtreino = window(ts_demanda, start = ini_treino , end = fim_treino) 
+length(dtreino)
+
+dteste = window(ts_demanda, start = ini_teste, end = fim_teste)  
+altura = length(dteste)
+altura
+
+###############################################################################
+#                    DECOMPOSIÇÃO DA SÉRIE TEMOPORAL
+###############################################################################
+
+##### Decomposição nas componentes: Tedência, Sazonalidade e Erros
+
+# Decomposição pelo modelo ADITIVO
+
+decompa = decompose(ts_demanda, type = "additive")
+plot(decompa)
+
+# Decomposição pelo modelo MULTIPLICATIVO
+
+decompm=decompose(ts_demanda,type = "multiplicative")
+plot(decompm)
+
+# Analisando cada uma das compontentes: 
+# Trend = Tendencia, Seasonal = Sazonalidades e Random = Erros
+
+decompm$trend
+decompm$seasonal
+decompm$random
+
+
+###############################################################################
+#                         INICIO DAS MODELAGENS
+#
+#               MODELO SES - Suavização Exponencial Simples
+###############################################################################
+
+modeloses = ses(dtreino,h=altura)
+
+# valores previstos
+modeloses
+
+# Gerando SE: 
+modeloses$model
+
+# valores estimados
+modeloses$fitted
+
+# visualização dos dados e das previões com intervalos de confiança
+autoplot(modeloses)
+
+summary(modeloses)
+
+## MAPE de 35,11%
+
+# fazendo o forecast
+
+prevdemanda_ses = forecast::forecast(modeloses, dteste)
+prevdemanda_ses
+
+mape_ses_trein = forecast::accuracy(prevdemanda_ses, dteste)[9] 
+mape_ses_trein
+
+
+mape_ses_teste = forecast::accuracy(prevdemanda_ses, dteste)[10]
+mape_ses_teste
+
+###############################################################################
+## Modelo de Holt com Tendência e Sazonalidade - Aditivo
+###############################################################################
+
+mod_hw_ad <- hw(dtreino,h=altura,seasonal="additive")
+
+# valores previstos
+mod_hw_ad
+
+# modelo gerado
+mod_hw_ad$model
+
+# visualização dos dados e das previsões com intervalos de confiança
+autoplot(mod_hw_ad)
+
+summary(mod_hw_ad)
+
+# fazendo o forecast
+
+prevdemanda_hwa = forecast::forecast(mod_hw_ad, dteste) 
+prevdemanda_hwa 
+
+mape_hwa_trein = forecast::accuracy(mod_hw_ad, dteste)[9] 
+mape_hwa_trein 
+
+mape_hwa_teste = forecast::accuracy(mod_hw_ad, dteste)[10]
+mape_hwa_teste 
+
+###############################################################################
+## Modelo de Holt com Tendência e Sazonalidade Multiplicativo
+###############################################################################
+
+mod_hw_mu = hw(dtreino,h=altura,seasonal="multiplicative")
+
+# valores previstos
+mod_hw_mu
+
+# modelo gerado
+mod_hw_mu$model
+
+# visualização dos dados e das previsões com intervalos de confiança
+autoplot(mod_hw_mu)
+
+summary(mod_hw_mu)
+
+## MAPE de 13,66%%, corrigindo 15,15%
+
+prevdemanda_hwm = forecast::forecast(mod_hw_mu, dteste) 
+prevdemanda_hwm
+
+mape_hwm_trein = forecast::accuracy(mod_hw_mu, dteste)[9] 
+mape_hwm_trein  ## MAPE TREINO de 15,15%
+
+mape_hwm_teste = forecast::accuracy(mod_hw_mu, dteste)[10]
+mape_hwm_teste  ## MAPE TESTE de 11,59%
+
+
+###############################################################################
+#                          MODELO ARIMA
+###############################################################################
+
+
+arima_model <- auto.arima(ts_demanda, trace=T)
+# o melhor modelo foi um ARIMA(0,1,1)(0,1,1)
+
+#testando os resíduos
+
+checkresiduals(arima_model)
+# p-value > 0.05, então podemos seguir
+
+# Testando a normalidade dos resíduso
+
+ks.test(arima_model$residuals, 
+        "pnorm", 
+        mean(arima_model$residuals),
+        sd(arima_model$residuals))
+
+# p-value = > 0,01, Resíduos normais
+
+
+## Análise da Série
+ggtsdisplay(ts_demanda)
+
+# Teste de Estacionariedade - Dickey Furley (DF) de raiz unitária
+testedf = ur.df(ts_demanda)
+summary(testedf)
+
+# P-value do z.lag.1 > 0.01
+# Indica que a série não é estacionária - precisa ser diferenciada. 
+
+# verificando a ordem de diferenciação
+ndiffs(ts_demanda)     
+
+# Ordem de diferencação = 0, indica que a série é estacionária, uma contradição
+
+# Teste KPSS de raiz unitária para analisar a contradição.
+# Este teste avalia se de fato a série é estacionária
+
+ur.kpss(ts_demanda)
+summary(ur.kpss(ts_demanda))
+# Conclusão: t-test (test statistic) < 0.739 (ponto crítico para 99% confiança) - ACEITO H0,
+# portanto podemos assumir que a série é estacionária
+
+
+# Teste de Zivot-Andrews que busca testar a hipótese nula de raiz unitária na presença de uma quebra estrutural 
+
+ur.za(ts_demanda)
+summary(ur.za(ts_demanda))
+# possui uma quebra na posição 67. O teste indica o valor de -6,2281 muito abaixo dos valores críticos:
+# 0.01= -5.34 0.05= -4.8 0.1= -4.58 indicando que podemos rejeitar a hipótese nula e concluir que a série 
+# é estacionária após considerar uma quebra estrutural.
+
+arima_treino = auto.arima(dtreino, trace=T)
+
+# fazendo o forecast
+
+prevdemanda = forecast::forecast(arima_treino, h=altura) 
+prevdemanda
+
+autoplot(prevdemanda) +    # comprando o modelo com os dados verdadeiros
+  theme_bw()
+
+forecast::accuracy(prevdemanda, dteste) 
+
+mape_arima_trein = forecast::accuracy(prevdemanda, dteste)[1,"MAPE"]   
+mape_arima_trein  
+
+mape_arima_teste = forecast::accuracy(prevdemanda, dteste)[2,"MAPE"]  
+mape_arima_teste 
+
+###############################################################################
+#                               MODELO ETS
+###############################################################################
+
+# E (Error) T (Trend) S (Season)
+# Erro: aditivo (A) ou multiplicativo (M)
+# Tendência: nenhuma (N), aditiva (A), multiplicativa (M) ou amortecida (Ad ou Md)
+# Sazonalidade: nenhuma (N), aditiva (A) ou multiplicativa (M)# E (Error) T (Trend) S (Season)
+# Erro: aditivo (A) ou multiplicativo (M)
+# Tendência: nenhuma (N), aditiva (A), multiplicativa (M) ou amortecida (Ad ou Md)
+# Sazonalidade: nenhuma (N), aditiva (A) ou multiplicativa (M)
+
+
+#Calculando o ETS automaticamente
+
+ets_treino <- ets(dtreino, model = "ZZZ")
+summary(ets_treino) 
+
+# Model Information:
+# ETS(M,Ad,A) --> 
+# Erro Multiplicativo, 
+# Tendência = Aditivo Amortecido, 
+# Sazonalidade Aditiva
+
+# Visualizando o forecast
+
+ets_forecast <- forecast.ets(ets_treino, h = altura)
+summary(ets_forecast)
+
+ETS=forecast(ets_forecast,h=altura)
+
+summary(ETS) 
+
+# Verificando o modelo ETS e armazenando em uma variável para gerar a tabela final:
+
+model_spec <- ets_forecast$model
+model_spec
+
+model_components <- model_spec$components[-length(model_spec$components)]
+model_type <- paste("ETS", paste(model_components, collapse = ","), sep = "(")
+model_type <- paste0(model_type, ")")
+
+# Imprimir a especificação do modelo
+print(model_type)
+
+# Verificando o MAPE
+forecast::accuracy(ets_forecast,dteste)
+
+
+autoplot(ets_forecast$residuals) # Gráfico de reíduos
+
+acf = acf(ets_forecast$residuals) 
+
+acf
+
+# Teste de Ljung-box, para saber se os resíduos são independentes e identicamente distribuídos
+# e que não há falhas de ajuste no modelo
+# H0: os resíduos são iid (modelo não exibe falhas de ajustes)
+# H1: os resíduos não são iid (modelo exibe falhas de ajustes)
+# não quero rejeitar H0 (quero aceitar H0 => um p-value grande)
+
+Box.test(ets_forecast$residuals, lag=1, type=c("Ljung-Box"))
+
+# 1. teste de Ljung-Box p-value = 0.9174>0.01, aceitamos H0, 
+# resíduos não são correlacionados
+
+ggplotly(
+  autoplot(dtreino)+
+    autolayer(dteste,serie="Valores Reais")+
+    autolayer(ETS$mean, serie="Previstos")+
+    scale_colour_viridis_d()+
+    scale_y_continuous(labels=scales::comma)+
+    theme_bw()
+)
+
+autoplot(ETS) +
+  theme_bw()
+
+
+mape_ets_trein = forecast::accuracy(ETS, dteste)[1,"MAPE"]  
+mape_ets_teste = forecast::accuracy(ETS, dteste)[2,"MAPE"]
+
+
+###############################################################################
+#                MODELO ETS COM TRANSFORMAÇÃO DE BOX-COX
+###############################################################################
+
+l = BoxCox.lambda(ts_demanda) 
+l
+
+BOX_ETS=forecast(ets(dtreino, lambda = l),h=altura)
+
+summary(BOX_ETS)
+
+# Armazenando a especificação do modelo
+model_spec_bc <- BOX_ETS$model
+model_spec_bc
+
+model_components_bc <- model_spec_bc$components[-length(model_spec_bc$components)]
+
+model_type_bc <- paste("ETS", paste(model_components_bc, collapse = ","), sep = "(")
+model_type_bc <- paste0(model_type_bc, ")")
+
+# Imprimir a especificação do modelo
+print(model_type_bc)
+
+# Armazenando com o prefixo de box cox:
+
+bc_prefix_model <- paste("BC",model_type_bc)
+
+forecast::accuracy(BOX_ETS,dteste)
+
+#Gerando MAPE para tabela comparativa que faremos no final
+
+mape_etsbc_trein = forecast::accuracy(BOX_ETS, dteste)[9] 
+mape_etsbc_trein  ## MAPE TREINO de 12,67%
+
+mape_etsbc_teste = forecast::accuracy(BOX_ETS, dteste)[10]
+mape_etsbc_teste  ## MAPE TESTE de 10,03%
+
+
+################################################################################
+#               MOEDLO NNAR - Neural Network AutoRegressive
+################################################################################
+
+# Ajustando o modelo NNAR ao conjunto de treino
+nnar_model <- nnetar(dtreino)
+
+nnar_model$fitted
+
+# Fazendo previsões
+nnar_forecast <- forecast(nnar_model, h=altura)
+
+# Avaliando o desempenho do modelo
+accuracy(nnar_forecast, dteste)
+
+# Armazenando o MAPE para tabela comparativa
+mape_nnar_trein = forecast::accuracy(nnar_model$fitted, dtreino)[1,"MAPE"]  
+mape_nnar_teste = forecast::accuracy(nnar_forecast, dteste)[2,"MAPE"]
+
+# GERANDO GRÁFICO
+
+# Converter as séries temporais para data frames
+df_treino <- data.frame(Time = time(dtreino), 
+                        Valores = as.numeric(dtreino), 
+                        Tipo = 'Treino')
+
+df_teste <- data.frame(Time = time(dteste), 
+                       Valores = as.numeric(dteste), 
+                       Tipo = 'Valores Reais')
+
+df_previsto <- data.frame(Time = time(dteste), 
+                          Valores = as.numeric(nnar_forecast$mean), 
+                          Tipo = 'Valores Previstos')
+
+# Verificando se todos são data frames
+stopifnot(is.data.frame(df_treino), is.data.frame(df_teste), is.data.frame(df_previsto))
+
+# Usando dplyr para combinar os data frames
+df_plot <- bind_rows(df_treino, df_teste, df_previsto)
+
+# Criando o gráfico com ggplot2
+p <- ggplot(df_plot, aes(x = Time, y = Valores, color = Tipo)) +
+  geom_line() +
+  labs(title = "Previsão vs Valores Reais", y = "Demanda", x = "Tempo") +
+  scale_color_manual(values = c('Treino' = 'grey', 
+                                'Valores Reais' = 'black', 
+                                'Valores Previstos' = 'red')) +
+  theme_bw() +
+  theme(legend.title = element_blank())
+
+# Renderizar o gráfico
+p
+
+
+
+###############################################################################
+###                    TABELA COMPARATIVA DOS MAPES
+###############################################################################
+
+
+modelos = c("SES", "ARIMA", "HW-Ad", "HW-Mu", model_type, bc_prefix_model,"NNAR")
+mape_trein = c(mape_ses_trein, mape_arima_trein, mape_hwa_trein, mape_hwm_trein, mape_ets_trein, mape_etsbc_trein, mape_nnar_trein)
+mape_teste = c(mape_ses_teste, mape_arima_teste, mape_hwa_teste, mape_hwm_teste, mape_ets_teste, mape_etsbc_teste, mape_nnar_teste)
+
+# mantendo 5 casas decimais após a vírgula:
+mape_trein = sprintf("%.5f", mape_trein)
+mape_teste = sprintf("%.5f", mape_teste)
+
+tabela = data.frame(modelos, mape_trein, mape_teste)
+
+# Encontrando o índice do menor valor em mape_teste
+indice_menor_mape_teste <- which.min(mape_teste)
+
+# Encontrando o modelo correspondente
+modelo_menor_mape_teste <- modelos[indice_menor_mape_teste]
+
+# Adicionando uma nova linha à tabela
+tabela <- rbind(tabela, c("Menor MAPE:", modelo_menor_mape_teste , " "))
+
+# Mostrando a tabela atualizada
+print(tabela)
+
+
+
+## SALVANDO TABELA EM EXCEL ###
+
+# Obter o caminho do diretório de trabalho atual
+caminho <- getwd()
+
+# Definir o caminho completo do arquivo Excel concatenando o ano inicial e o final
+
+ano_inicio = 2011
+ano_final = 2010 + i + j
+
+arquivo_excel <- paste0(caminho, "/tabela_mape", i , j,"-" ,ano_inicio, "-", ano_final, ".xlsx")
+
+# Exportar dados para um arquivo Excel .xlsx
+write_xlsx(tabela, arquivo_excel)
+
+
+# Fazendo o forecast supondo que você já tenha o objeto ETS criado pela função forecast()
+# Definindo a janela
+
+dfull = window(ts_demanda, start = c(2011,1) , end = c(2019,12)) 
+ETS <- forecast(ets(dfull), h=24) 
+
+# Convertendo as datas para o formato legível e criando o data frame df_forecast
+df_forecast <- data.frame(Date = as.Date(as.yearmon(time(ETS$mean))), 
+                          Point_Forecast = ETS$mean, 
+                          Lo_80 = ETS$lower[, "80%"], 
+                          Hi_80 = ETS$upper[, "80%"], 
+                          Lo_95 = ETS$lower[, "95%"], 
+                          Hi_95 = ETS$upper[, "95%"])
+
+# Visualizando o data frame df_forecast
+print(df_forecast)
+
+arquivo_excel <- paste0(caminho, "/forecast_modelo-ETS_v2.xlsx")
+
+# Exportar dados para um arquivo Excel .xlsx
+write_xlsx(df_forecast, arquivo_excel)
+
+
+
